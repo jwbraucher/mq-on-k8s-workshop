@@ -1,0 +1,21 @@
+{
+  "channel": [
+    {
+      "name": "APP.SVRCONN",
+      "type": "clientConnection",
+      "clientConnection": {
+        "connection": [
+          {
+            "host": "ibm-mq.mq.svc.cluster.local",
+            "port": 1414
+          }
+        ],
+        "queueManager": "qm1"
+      },
+      "transmissionSecurity": {
+        "cipherSpecification": "ANY_TLS12_OR_HIGHER",
+        "certificateLabel": "mq-client"
+      }
+    }
+  ]
+}

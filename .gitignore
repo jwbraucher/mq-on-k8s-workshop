@@ -1,0 +1,11 @@
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+.terraform.tfstate.lock.info
+.terraform/
+certs/out/
+docker/.image-stamp
+docker/mq-container/
+docker/mq-metric-samples/
+docker/mq_prometheus
+opentofu/.deploy-stamp

@@ -1,0 +1,5 @@
+namespace    = "mq"
+kube_context = "docker-desktop"
+qmgr_name    = "qm1"
+image        = "moov-mq:local"
+certs_dir    = "../certs/out"

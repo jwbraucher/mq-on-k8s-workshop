@@ -1,0 +1,83 @@
+#
+# Long-running client pod used by the README to drive amqsput / amqsbcg.
+#
+# A Secret named "mq-client" is expected in the same namespace. The README
+# creates it from the output of certs/create-certs.sh:
+#
+#   kubectl -n mq create secret generic mq-client \
+#     --from-file=certs/out/mq-client.p12 \
+#     --from-file=certs/out/ca.crt \
+#     --from-file=client/ccdt.json
+#
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mq-client
+  namespace: mq
+  labels:
+    app.kubernetes.io/name: mq-client
+spec:
+  restartPolicy: Never
+
+  # Convert the PKCS#12 keystore handed in via Secret into the CMS .kdb
+  # format that the amqs* sample programs expect. The result lives in an
+  # emptyDir so it is writable by the main container.
+  initContainers:
+    - name: keystore-init
+      image: moov-mq:local
+      imagePullPolicy: IfNotPresent
+      command:
+        - /bin/bash
+        - -c
+        - |
+          set -ex
+          cd /work
+          runmqakm -keydb -create -db mq-client.kdb \
+            -pw passw0rd -type cms -stash
+          # Personal cert. The p12 has friendly name "mq-client" already,
+          # so no -new_label is needed. Passing -new_label here (or bundling
+          # ca.crt into the p12 with openssl -certfile) would apply the same
+          # label to every cert in the archive and GSKit would abort with
+          # "CTGSK2021W A duplicate certificate already exists in the database".
+          runmqakm -cert -import -file /secret/mq-client.p12 \
+            -pw passw0rd -type p12 \
+            -target mq-client.kdb -target_pw passw0rd \
+            -target_type cms
+          # Signer cert. The client needs the CA to verify the qmgr's cert.
+          runmqakm -cert -add -db mq-client.kdb -pw passw0rd \
+            -type cms -file /secret/ca.crt \
+            -label mq-tutorial-ca -format ascii
+      volumeMounts:
+        - name: client-secret
+          mountPath: /secret
+          readOnly: true
+        - name: keystore
+          mountPath: /work
+
+  containers:
+    - name: mq-client
+      image: moov-mq:local
+      imagePullPolicy: IfNotPresent
+      command: ["sleep", "infinity"]
+      env:
+        - name: MQCCDTURL
+          value: file:///secret/ccdt.json
+        - name: MQSSLKEYR
+          value: /work/mq-client
+        - name: MQCERTLABL
+          value: mq-client
+        - name: PATH
+          value: "/opt/mqm/samp/bin:/opt/mqm/bin:/usr/local/bin:/usr/bin:/bin"
+      volumeMounts:
+        - name: client-secret
+          mountPath: /secret
+          readOnly: true
+        - name: keystore
+          mountPath: /work
+
+  volumes:
+    - name: client-secret
+      secret:
+        secretName: mq-client
+    - name: keystore
+      emptyDir: {}

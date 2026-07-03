@@ -1,0 +1,107 @@
+* MQSC initialisation script.
+* Executed once by the container runtime when the queue manager is created.
+* Sets up:
+*   - the app SVRCONN channel with mutual TLS
+*   - the application principal "app" mapped from the client certificate
+*   - APP.IN (queue alias) and APP.OUT (local queue)
+*   - the Prometheus exporter service
+*
+* The application sends to APP.IN; APP.IN is an alias targeting APP.OUT;
+* the application then reads back from APP.OUT - demonstrating that send
+* and receive happen via different queue names.
+
+* ---------------------------------------------------------------------------
+* Authentication & authorisation
+* ---------------------------------------------------------------------------
+
+* Use the operating system / internal authorisation service rather than LDAP.
+ALTER AUTHINFO(SYSTEM.DEFAULT.AUTHINFO.IDPWOS) AUTHTYPE(IDPWOS) +
+  ADOPTCTX(YES) CHCKCLNT(OPTIONAL) CHCKLOCL(OPTIONAL) AUTHENMD(OS)
+REFRESH SECURITY TYPE(CONNAUTH)
+
+* ---------------------------------------------------------------------------
+* Application channel
+* ---------------------------------------------------------------------------
+
+* SVRCONN that the application client connects to.
+* SSLCAUTH(REQUIRED) forces the client to present its own certificate.
+DEFINE CHANNEL(APP.SVRCONN) +
+  CHLTYPE(SVRCONN) +
+  TRPTYPE(TCP) +
+  SSLCAUTH(REQUIRED) +
+  SSLCIPH('ANY_TLS12_OR_HIGHER') +
+  REPLACE
+
+* Map a client whose certificate has CN=mq-client to the local user "app".
+* This is how cert-based authentication is performed: the certificate
+* presented during the TLS handshake controls the MCAUSER assigned to
+* the connection.
+SET CHLAUTH('APP.SVRCONN') +
+  TYPE(SSLPEERMAP) +
+  SSLPEER('CN=mq-client') +
+  USERSRC(MAP) +
+  MCAUSER('app') +
+  ACTION(REPLACE)
+
+* Block the catch-all rule that disallows administrative connections
+* on this specific channel for the "app" user.
+SET CHLAUTH('APP.SVRCONN') +
+  TYPE(BLOCKUSER) +
+  USERLIST('nobody') +
+  ACTION(REPLACE)
+
+* ---------------------------------------------------------------------------
+* Queues
+* ---------------------------------------------------------------------------
+
+* The local queue we will eventually read messages from.
+DEFINE QLOCAL('APP.OUT') +
+  DESCR('Application receive queue') +
+  DEFPSIST(YES) +
+  MAXDEPTH(5000) +
+  REPLACE
+
+* The alias the application writes to. Writes are silently redirected
+* to APP.OUT - showing the standard MQ pattern of decoupling the
+* logical send target from the physical local queue.
+DEFINE QALIAS('APP.IN') +
+  DESCR('Application send queue (alias -> APP.OUT)') +
+  TARGTYPE(QUEUE) +
+  TARGET('APP.OUT') +
+  DEFPSIST(YES) +
+  PUT(ENABLED) +
+  GET(ENABLED) +
+  REPLACE
+
+* ---------------------------------------------------------------------------
+* Authorisations for the "app" principal
+* ---------------------------------------------------------------------------
+
+SET AUTHREC PRINCIPAL('app') OBJTYPE(QMGR) +
+  AUTHADD(CONNECT,INQ)
+
+SET AUTHREC PROFILE('APP.IN')  PRINCIPAL('app') OBJTYPE(QUEUE) +
+  AUTHADD(PUT,INQ,BROWSE)
+SET AUTHREC PROFILE('APP.OUT') PRINCIPAL('app') OBJTYPE(QUEUE) +
+  AUTHADD(GET,INQ,BROWSE)
+
+* ---------------------------------------------------------------------------
+* Prometheus exporter service
+* ---------------------------------------------------------------------------
+
+ALTER QMGR MAXHANDS(512)
+
+DEFINE SERVICE(MQPROMETHEUS) +
+  CONTROL(QMGR) +
+  SERVTYPE(SERVER) +
+  STARTCMD('/usr/local/bin/mq_prometheus.sh') +
+  STARTARG(+QMNAME+) +
+  STOPCMD('/usr/bin/kill ') +
+  STOPARG(+MQ_SERVER_PID+) +
+  STDOUT('/var/mqm/errors/mq_prometheus.out') +
+  STDERR('/var/mqm/errors/mq_prometheus.out') +
+  DESCR('MQ exporter for Prometheus') +
+  REPLACE
+START SERVICE(MQPROMETHEUS)
+
+REFRESH SECURITY TYPE(CONNAUTH)
